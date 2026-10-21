@@ -8,8 +8,10 @@
     --tunnel: #14161c;
     --rail: #5b6170;
     --sleeper: #2a2e38;
+    --platform: #3a3f4c;
     --line: #f2c230;      /* amarillo de línea */
     --danger: #e5484d;
+    --ok: #3ccf91;
     --ink: #f4f1e8;
     --muted: #9aa0ad;
     --font: "Barlow Condensed", "Arial Narrow", system-ui, sans-serif;
@@ -29,21 +31,39 @@
     display: flex; justify-content: space-between; align-items: flex-start; gap: 12px;
     pointer-events: none;
   }
+  .left { display: grid; gap: 6px; min-width: 0; justify-items: start; }
   .sign {
-    display: flex; align-items: center; gap: 8px;
+    display: flex; align-items: center; gap: 8px; max-width: 100%;
     background: var(--ink); color: var(--tunnel);
     padding: 4px 12px 4px 4px; border-radius: 6px;
     font-weight: 700; font-size: 20px; letter-spacing: .02em; min-width: 0;
   }
-  .sign span:last-child { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .sign .txt { display: grid; line-height: 1; min-width: 0; }
+  .sign small { font-size: 11px; letter-spacing: .1em; text-transform: uppercase; opacity: .65; }
+  .sign .txt span { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .badge {
     flex: none; width: 30px; height: 30px; border-radius: 50%;
     background: var(--line); color: var(--tunnel);
     display: grid; place-items: center; font-weight: 800; font-size: 18px;
   }
-  .score { text-align: right; font-variant-numeric: tabular-nums; line-height: 1; }
-  .score b { display: block; font-size: 34px; font-weight: 800; }
+  .chip {
+    background: color-mix(in srgb, var(--tunnel) 80%, transparent); border: 1px solid var(--line);
+    border-radius: 999px; padding: 2px 10px; font-size: 17px; font-weight: 700;
+    font-variant-numeric: tabular-nums; color: var(--line);
+  }
+  .chip.pop { animation: pop .25s ease-out; }
+  @keyframes pop { 50% { transform: scale(1.18); } }
+  .score { text-align: right; font-variant-numeric: tabular-nums; line-height: 1; display: grid; gap: 3px; }
+  .score b { font-size: 34px; font-weight: 800; }
   .score small { font-size: 13px; color: var(--muted); letter-spacing: .08em; text-transform: uppercase; }
+  #toast {
+    position: fixed; left: 0; right: 0; top: 38%; text-align: center; pointer-events: none;
+    font-size: 30px; font-weight: 800; color: var(--ok); text-shadow: 0 2px 0 var(--tunnel);
+    padding-left: max(16px, env(safe-area-inset-left, 0px));
+    padding-right: max(16px, env(safe-area-inset-right, 0px));
+    opacity: 0; transition: opacity .3s;
+  }
+  #toast.show { opacity: 1; transition: none; }
   #panel {
     position: fixed; inset: 0; display: grid; place-items: center;
     padding-left: max(16px, env(safe-area-inset-left, 0px));
@@ -63,19 +83,24 @@
     background: var(--line); color: var(--tunnel); border: 0; border-radius: 8px; padding: 14px; cursor: pointer;
   }
   button:focus-visible { outline: 3px solid var(--ink); outline-offset: 3px; }
+  @media (prefers-reduced-motion: reduce) { .chip.pop { animation: none; } }
 </style>
 
 <canvas id="game"></canvas>
 
 <div id="hud">
-  <div class="sign"><span class="badge">0</span><span id="station">Andén</span></div>
-  <div class="score"><b id="pts">0</b><small id="best">Récord 0</small></div>
+  <div class="left">
+    <div class="sign"><span class="badge">B</span><span class="txt"><small>Próxima</small><span id="station">Dalt la Vila</span></span></div>
+    <div class="chip" id="aboard">0 a bordo</div>
+  </div>
+  <div class="score"><b id="pts">0</b><small id="delivered">0 dejados</small><small id="best">Récord 0</small></div>
 </div>
+<div id="toast"></div>
 
 <div id="panel">
   <div class="card" id="card">
     <h1>Línea <em>0</em></h1>
-    <p>Toca a la izquierda o derecha para cambiar de vía. Esquiva las barreras rojas y recoge pasajeros.</p>
+    <p>Toca a la izquierda o derecha para cambiar de vía. Recoge pasajeros y déjalos en la próxima estación de Badalona. Si chocas con una barrera roja, los pierdes.</p>
     <button id="go" type="button">Salir de la estación</button>
   </div>
 </div>
@@ -87,11 +112,14 @@
   const $ = id => document.getElementById(id);
   const panel = $('panel'), card = $('card');
 
-  const STATIONS = ['Sol', 'Ópera', 'Callao', 'Tribunal', 'Bilbao', 'Quevedo', 'Ríos Rosas',
-    'Cuatro Caminos', 'Alvarado', 'Estrecho', 'Tetuán', 'Valdeacederas', 'Plaza Castilla',
-    'Chamartín', 'Pinar', 'Atocha', 'Lavapiés', 'Embajadores', 'Legazpi', 'Delicias',
-    'Moncloa', 'Argüelles', 'Ventura Rodríguez', 'Noviciado', 'Gran Vía', 'Banco', 'Retiro'];
-  const STATION_EVERY = 900; // metros entre estaciones
+  const STATIONS = ['Dalt la Vila', 'Centre', 'Progrés', 'El Gorg', 'Casagemes', 'Canyadó',
+    'Bufalà', 'Llefià', 'Sant Roc', 'Artigues', 'La Salut', 'Pomar', 'Morera', 'Montigalà',
+    'Sistrells', 'Lloreda', 'Nova Lloreda', 'Puigfred', 'Bonavista', 'Coll i Pujol',
+    'Can Claris', 'Canyet', 'Manresà', 'El Remei', 'Mas Ram', 'Sant Crist', 'La Mora',
+    'Sant Antoni de Llefià', 'Sant Joan de Llefià', 'La Pau', 'Congrés'];
+  const STATION_GAP = 2400; // píxeles de vía entre estaciones
+  const PLATFORM_H = 130;
+  const PTS_PER_PAX = 10;
 
   let W = 0, H = 0, dpr = 1;
   function resize() {
@@ -113,10 +141,25 @@
 
   let s; // estado de partida
   function reset() {
-    s = { lane: 1, x: 1, speed: 320, dist: 0, pts: 0, items: [], spawn: 0,
-          station: 0, flash: 0, running: true, scroll: 0 };
+    s = { lane: 1, x: 1, speed: 340, dist: 0, pts: 0, items: [], spawn: 200,
+          toStation: STATION_GAP, station: 0, aboard: 0, delivered: 0,
+          flash: 0, running: true, scroll: 0 };
     $('station').textContent = STATIONS[0];
-    $('pts').textContent = 0;
+    hud();
+  }
+
+  function hud() {
+    $('pts').textContent = s.pts;
+    $('aboard').textContent = s.aboard + (s.aboard === 1 ? ' pasajero' : ' a bordo');
+    $('delivered').textContent = s.delivered + ' dejados';
+  }
+  function pop() {
+    const el = $('aboard'); el.classList.remove('pop'); void el.offsetWidth; el.classList.add('pop');
+  }
+  let toastT;
+  function toast(msg) {
+    const el = $('toast'); el.textContent = msg; el.classList.add('show');
+    clearTimeout(toastT); toastT = setTimeout(() => el.classList.remove('show'), 900);
   }
 
   function move(dir) {
@@ -143,25 +186,37 @@
   function spawnRow() {
     // Siempre deja al menos una vía libre
     const blocked = new Set();
-    const n = Math.random() < Math.min(0.25 + s.dist / 12000, 0.6) ? 2 : 1;
+    const n = Math.random() < Math.min(0.25 + s.station * 0.05, 0.65) ? 2 : 1;
     while (blocked.size < n) blocked.add(Math.floor(Math.random() * 3));
     blocked.forEach(l => s.items.push({ lane: l, y: -60, kind: 'bar' }));
     for (let l = 0; l < 3; l++) {
-      if (!blocked.has(l) && Math.random() < 0.45) s.items.push({ lane: l, y: -160, kind: 'pax' });
+      if (!blocked.has(l) && Math.random() < 0.5) s.items.push({ lane: l, y: -160, kind: 'pax' });
     }
+  }
+
+  function arrive() {
+    const name = STATIONS[s.station % STATIONS.length];
+    const n = s.aboard;
+    s.pts += n * PTS_PER_PAX;
+    s.delivered += n; s.aboard = 0;
+    s.station++; s.flash = 1;
+    s.speed += 45; // cada estación, más rápido
+    toast(n ? `+${n} en ${name}` : `${name}: nadie baja`);
+    $('station').textContent = STATIONS[s.station % STATIONS.length];
+    hud();
   }
 
   function crash() {
     s.running = false;
     try { navigator.vibrate && navigator.vibrate(200); } catch (e) {}
+    const lost = s.aboard;
     const record = s.pts > best;
     if (record) { best = s.pts; try { localStorage.setItem('linea0-best', best); } catch (e) {} }
     $('best').textContent = 'Récord ' + best;
-    const km = (s.dist / 1000).toFixed(1);
     card.innerHTML = `
       <h1>${record ? '¡Nuevo <em>récord</em>!' : 'Fin de <em>trayecto</em>'}</h1>
-      <p class="big">${s.pts} puntos · ${km} km · ${s.station} estaciones</p>
-      <p>Última parada: ${STATIONS[s.station % STATIONS.length]}</p>
+      <p class="big">${s.pts} puntos · ${s.delivered} pasajeros dejados · ${s.station} estaciones</p>
+      <p>${lost ? `Perdiste ${lost} ${lost === 1 ? 'pasajero' : 'pasajeros'} antes de ${STATIONS[s.station % STATIONS.length]}.` : `Ibas hacia ${STATIONS[s.station % STATIONS.length]}.`}</p>
       <button id="go" type="button">Otra vez</button>`;
     $('go').onclick = start;
     setTimeout(() => { panel.hidden = false; $('go').focus(); }, 350);
@@ -169,34 +224,37 @@
 
   function update(dt) {
     if (!s.running) { s.flash = Math.max(0, s.flash - dt); return; }
-    s.speed = Math.min(320 + s.dist * 0.05, 900);
+    s.flash = Math.max(0, s.flash - dt * 1.5);
+    s.speed = Math.min(s.speed + dt * 6, 1500); // y también poco a poco
     const dy = s.speed * dt;
-    s.dist += dy * 0.5;
+    s.dist += dy;
     s.scroll = (s.scroll + dy) % 40;
-    s.x += (s.lane - s.x) * Math.min(1, dt * 14);
+    s.x += (s.lane - s.x) * Math.min(1, dt * (14 + s.speed / 80));
 
-    s.spawn -= dy;
-    if (s.spawn <= 0) { spawnRow(); s.spawn = Math.max(170, 340 - s.dist * 0.01); }
-
-    const st = Math.floor(s.dist / STATION_EVERY);
-    if (st !== s.station) {
-      s.station = st; s.pts += 25; s.flash = 1;
-      $('station').textContent = STATIONS[st % STATIONS.length];
+    s.toStation -= dy;
+    if (s.toStation <= 0) {
+      s.items.push({ kind: 'stop', y: -PLATFORM_H, name: STATIONS[s.station % STATIONS.length] });
+      s.toStation = STATION_GAP;
+      s.spawn = PLATFORM_H + 220; // andén despejado
     }
+    s.spawn -= dy;
+    if (s.spawn <= 0) { spawnRow(); s.spawn = Math.max(180, 340 - s.station * 12); }
 
     const ty = trainY(), lw = laneW();
     for (const it of s.items) {
       it.y += dy;
       if (it.hit) continue;
+      if (it.kind === 'stop') {
+        if (it.y + PLATFORM_H > ty) { it.hit = true; arrive(); }
+        continue;
+      }
       const sameLane = Math.abs(laneX(s.x) - laneX(it.lane)) < lw * 0.4;
       if (sameLane && it.y > ty - 20 && it.y < ty + 90) {
         if (it.kind === 'bar') { crash(); return; }
-        it.hit = true; s.pts += 10;
+        it.hit = true; s.aboard++; pop(); hud();
       }
     }
     s.items = s.items.filter(it => it.y < H + 80 && !(it.hit && it.kind === 'pax'));
-    s.pts += 0; // los puntos vienen de pasajeros y estaciones
-    $('pts').textContent = s.pts;
   }
 
   function roundRect(x, y, w, h, r) {
@@ -209,10 +267,19 @@
     ctx.fillStyle = C('--tunnel'); ctx.fillRect(0, 0, W, H);
 
     const lw = laneW();
-    // Andén al pasar estación
     if (s && s.flash > 0) {
-      ctx.globalAlpha = s.flash * 0.35; ctx.fillStyle = C('--line');
+      ctx.globalAlpha = s.flash * 0.3; ctx.fillStyle = C('--ok');
       ctx.fillRect(0, 0, W, H); ctx.globalAlpha = 1;
+    }
+    // Andenes (checkpoints)
+    if (s) for (const it of s.items) {
+      if (it.kind !== 'stop') continue;
+      ctx.fillStyle = C('--platform'); ctx.fillRect(0, it.y, W, PLATFORM_H);
+      ctx.fillStyle = C('--line');
+      ctx.fillRect(0, it.y, W, 6); ctx.fillRect(0, it.y + PLATFORM_H - 6, W, 6);
+      ctx.fillStyle = C('--ink'); ctx.font = `800 ${Math.min(40, W / 10)}px ${C('--font')}`;
+      ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+      ctx.fillText(it.name.toUpperCase(), W / 2, it.y + PLATFORM_H / 2);
     }
     // Vías
     for (let l = 0; l < 3; l++) {
@@ -225,6 +292,7 @@
     if (!s) return;
 
     for (const it of s.items) {
+      if (it.kind === 'stop') continue;
       const cx = laneX(it.lane);
       if (it.kind === 'bar') {
         ctx.fillStyle = C('--danger'); roundRect(cx - lw * 0.38, it.y, lw * 0.76, 22, 4); ctx.fill();
@@ -246,6 +314,11 @@
     ctx.fillStyle = C('--line');
     ctx.fillRect(tx - tw / 2, ty + 50, tw, 8);
     ctx.beginPath(); ctx.arc(tx - tw / 2 + 12, ty + 76, 5, 0, 7); ctx.arc(tx + tw / 2 - 12, ty + 76, 5, 0, 7); ctx.fill();
+    if (s.aboard) {
+      ctx.fillStyle = C('--tunnel'); ctx.font = `800 20px ${C('--font')}`;
+      ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+      ctx.fillText(s.aboard, tx, ty + 24);
+    }
   }
 
   let last = 0;
@@ -256,10 +329,9 @@
     requestAnimationFrame(loop);
   }
 
-  let wake = null;
   function start() {
     panel.hidden = true; reset();
-    try { navigator.wakeLock && navigator.wakeLock.request('screen').then(w => wake = w).catch(() => {}); } catch (e) {}
+    try { navigator.wakeLock && navigator.wakeLock.request('screen').catch(() => {}); } catch (e) {}
   }
   $('go').onclick = start;
   requestAnimationFrame(loop);
