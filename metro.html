@@ -1,0 +1,267 @@
+<title>Línea 0</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@500;700;800&display=swap">
+<style>
+  /* Una pantalla: vías a pantalla completa, rótulo de estación arriba, panel de inicio/fin encima */
+  :root {
+    --tunnel: #14161c;
+    --rail: #5b6170;
+    --sleeper: #2a2e38;
+    --line: #f2c230;      /* amarillo de línea */
+    --danger: #e5484d;
+    --ink: #f4f1e8;
+    --muted: #9aa0ad;
+    --font: "Barlow Condensed", "Arial Narrow", system-ui, sans-serif;
+    color-scheme: dark;
+  }
+  html, body { height: 100%; }
+  body {
+    background: var(--tunnel); color: var(--ink); font-family: var(--font);
+    overflow: hidden; touch-action: none; user-select: none; -webkit-user-select: none;
+  }
+  #game { display: block; width: 100%; height: 100%; }
+  #hud {
+    position: fixed; top: 0; left: 0; right: 0;
+    padding-top: calc(env(safe-area-inset-top, 0px) + 10px);
+    padding-left: max(16px, env(safe-area-inset-left, 0px));
+    padding-right: max(16px, env(safe-area-inset-right, 0px));
+    display: flex; justify-content: space-between; align-items: flex-start; gap: 12px;
+    pointer-events: none;
+  }
+  .sign {
+    display: flex; align-items: center; gap: 8px;
+    background: var(--ink); color: var(--tunnel);
+    padding: 4px 12px 4px 4px; border-radius: 6px;
+    font-weight: 700; font-size: 20px; letter-spacing: .02em; min-width: 0;
+  }
+  .sign span:last-child { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .badge {
+    flex: none; width: 30px; height: 30px; border-radius: 50%;
+    background: var(--line); color: var(--tunnel);
+    display: grid; place-items: center; font-weight: 800; font-size: 18px;
+  }
+  .score { text-align: right; font-variant-numeric: tabular-nums; line-height: 1; }
+  .score b { display: block; font-size: 34px; font-weight: 800; }
+  .score small { font-size: 13px; color: var(--muted); letter-spacing: .08em; text-transform: uppercase; }
+  #panel {
+    position: fixed; inset: 0; display: grid; place-items: center;
+    padding-left: max(16px, env(safe-area-inset-left, 0px));
+    padding-right: max(16px, env(safe-area-inset-right, 0px));
+    background: color-mix(in srgb, var(--tunnel) 70%, transparent);
+  }
+  .card {
+    width: min(100%, 360px); background: var(--tunnel); border: 2px solid var(--line);
+    border-radius: 10px; padding: 24px 20px; display: grid; gap: 14px; text-align: center;
+  }
+  .card h1 { margin: 0; font-size: 46px; font-weight: 800; line-height: .95; text-wrap: balance; }
+  .card h1 em { font-style: normal; color: var(--line); }
+  .card p { margin: 0; font-size: 18px; color: var(--muted); line-height: 1.3; }
+  .card .big { font-size: 22px; color: var(--ink); font-variant-numeric: tabular-nums; }
+  button {
+    font: inherit; font-size: 24px; font-weight: 800; letter-spacing: .04em; text-transform: uppercase;
+    background: var(--line); color: var(--tunnel); border: 0; border-radius: 8px; padding: 14px; cursor: pointer;
+  }
+  button:focus-visible { outline: 3px solid var(--ink); outline-offset: 3px; }
+</style>
+
+<canvas id="game"></canvas>
+
+<div id="hud">
+  <div class="sign"><span class="badge">0</span><span id="station">Andén</span></div>
+  <div class="score"><b id="pts">0</b><small id="best">Récord 0</small></div>
+</div>
+
+<div id="panel">
+  <div class="card" id="card">
+    <h1>Línea <em>0</em></h1>
+    <p>Toca a la izquierda o derecha para cambiar de vía. Esquiva las barreras rojas y recoge pasajeros.</p>
+    <button id="go" type="button">Salir de la estación</button>
+  </div>
+</div>
+
+<script>
+(() => {
+  const cv = document.getElementById('game');
+  const ctx = cv.getContext('2d');
+  const $ = id => document.getElementById(id);
+  const panel = $('panel'), card = $('card');
+
+  const STATIONS = ['Sol', 'Ópera', 'Callao', 'Tribunal', 'Bilbao', 'Quevedo', 'Ríos Rosas',
+    'Cuatro Caminos', 'Alvarado', 'Estrecho', 'Tetuán', 'Valdeacederas', 'Plaza Castilla',
+    'Chamartín', 'Pinar', 'Atocha', 'Lavapiés', 'Embajadores', 'Legazpi', 'Delicias',
+    'Moncloa', 'Argüelles', 'Ventura Rodríguez', 'Noviciado', 'Gran Vía', 'Banco', 'Retiro'];
+  const STATION_EVERY = 900; // metros entre estaciones
+
+  let W = 0, H = 0, dpr = 1;
+  function resize() {
+    dpr = Math.min(window.devicePixelRatio || 1, 2);
+    W = cv.clientWidth; H = cv.clientHeight;
+    cv.width = W * dpr; cv.height = H * dpr;
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  }
+  window.addEventListener('resize', resize);
+  resize();
+
+  let best = 0;
+  try { best = +localStorage.getItem('linea0-best') || 0; } catch (e) {}
+  $('best').textContent = 'Récord ' + best;
+
+  const laneW = () => Math.min(W / 3, 140);
+  const laneX = i => W / 2 + (i - 1) * laneW();
+  const trainY = () => H - Math.max(120, H * 0.18);
+
+  let s; // estado de partida
+  function reset() {
+    s = { lane: 1, x: 1, speed: 320, dist: 0, pts: 0, items: [], spawn: 0,
+          station: 0, flash: 0, running: true, scroll: 0 };
+    $('station').textContent = STATIONS[0];
+    $('pts').textContent = 0;
+  }
+
+  function move(dir) {
+    if (!s || !s.running) return;
+    s.lane = Math.max(0, Math.min(2, s.lane + dir));
+  }
+
+  // Controles: toque por mitades, deslizar, teclado
+  let tx = null;
+  cv.addEventListener('pointerdown', e => { tx = e.clientX; });
+  cv.addEventListener('pointerup', e => {
+    if (tx === null) return;
+    const dx = e.clientX - tx;
+    if (Math.abs(dx) > 30) move(dx > 0 ? 1 : -1);
+    else move(e.clientX < W / 2 ? -1 : 1);
+    tx = null;
+  });
+  window.addEventListener('keydown', e => {
+    if (e.key === 'ArrowLeft' || e.key === 'a') move(-1);
+    if (e.key === 'ArrowRight' || e.key === 'd') move(1);
+    if ((e.key === ' ' || e.key === 'Enter') && !panel.hidden) { e.preventDefault(); start(); }
+  });
+
+  function spawnRow() {
+    // Siempre deja al menos una vía libre
+    const blocked = new Set();
+    const n = Math.random() < Math.min(0.25 + s.dist / 12000, 0.6) ? 2 : 1;
+    while (blocked.size < n) blocked.add(Math.floor(Math.random() * 3));
+    blocked.forEach(l => s.items.push({ lane: l, y: -60, kind: 'bar' }));
+    for (let l = 0; l < 3; l++) {
+      if (!blocked.has(l) && Math.random() < 0.45) s.items.push({ lane: l, y: -160, kind: 'pax' });
+    }
+  }
+
+  function crash() {
+    s.running = false;
+    try { navigator.vibrate && navigator.vibrate(200); } catch (e) {}
+    const record = s.pts > best;
+    if (record) { best = s.pts; try { localStorage.setItem('linea0-best', best); } catch (e) {} }
+    $('best').textContent = 'Récord ' + best;
+    const km = (s.dist / 1000).toFixed(1);
+    card.innerHTML = `
+      <h1>${record ? '¡Nuevo <em>récord</em>!' : 'Fin de <em>trayecto</em>'}</h1>
+      <p class="big">${s.pts} puntos · ${km} km · ${s.station} estaciones</p>
+      <p>Última parada: ${STATIONS[s.station % STATIONS.length]}</p>
+      <button id="go" type="button">Otra vez</button>`;
+    $('go').onclick = start;
+    setTimeout(() => { panel.hidden = false; $('go').focus(); }, 350);
+  }
+
+  function update(dt) {
+    if (!s.running) { s.flash = Math.max(0, s.flash - dt); return; }
+    s.speed = Math.min(320 + s.dist * 0.05, 900);
+    const dy = s.speed * dt;
+    s.dist += dy * 0.5;
+    s.scroll = (s.scroll + dy) % 40;
+    s.x += (s.lane - s.x) * Math.min(1, dt * 14);
+
+    s.spawn -= dy;
+    if (s.spawn <= 0) { spawnRow(); s.spawn = Math.max(170, 340 - s.dist * 0.01); }
+
+    const st = Math.floor(s.dist / STATION_EVERY);
+    if (st !== s.station) {
+      s.station = st; s.pts += 25; s.flash = 1;
+      $('station').textContent = STATIONS[st % STATIONS.length];
+    }
+
+    const ty = trainY(), lw = laneW();
+    for (const it of s.items) {
+      it.y += dy;
+      if (it.hit) continue;
+      const sameLane = Math.abs(laneX(s.x) - laneX(it.lane)) < lw * 0.4;
+      if (sameLane && it.y > ty - 20 && it.y < ty + 90) {
+        if (it.kind === 'bar') { crash(); return; }
+        it.hit = true; s.pts += 10;
+      }
+    }
+    s.items = s.items.filter(it => it.y < H + 80 && !(it.hit && it.kind === 'pax'));
+    s.pts += 0; // los puntos vienen de pasajeros y estaciones
+    $('pts').textContent = s.pts;
+  }
+
+  function roundRect(x, y, w, h, r) {
+    ctx.beginPath(); ctx.roundRect ? ctx.roundRect(x, y, w, h, r) : ctx.rect(x, y, w, h);
+  }
+
+  function draw() {
+    const css = getComputedStyle(document.documentElement);
+    const C = k => css.getPropertyValue(k).trim();
+    ctx.fillStyle = C('--tunnel'); ctx.fillRect(0, 0, W, H);
+
+    const lw = laneW();
+    // Andén al pasar estación
+    if (s && s.flash > 0) {
+      ctx.globalAlpha = s.flash * 0.35; ctx.fillStyle = C('--line');
+      ctx.fillRect(0, 0, W, H); ctx.globalAlpha = 1;
+    }
+    // Vías
+    for (let l = 0; l < 3; l++) {
+      const cx = laneX(l);
+      ctx.fillStyle = C('--sleeper');
+      for (let y = -40 + (s ? s.scroll : 0); y < H; y += 40) ctx.fillRect(cx - lw * 0.36, y, lw * 0.72, 10);
+      ctx.fillStyle = C('--rail');
+      ctx.fillRect(cx - lw * 0.26, 0, 4, H); ctx.fillRect(cx + lw * 0.26 - 4, 0, 4, H);
+    }
+    if (!s) return;
+
+    for (const it of s.items) {
+      const cx = laneX(it.lane);
+      if (it.kind === 'bar') {
+        ctx.fillStyle = C('--danger'); roundRect(cx - lw * 0.38, it.y, lw * 0.76, 22, 4); ctx.fill();
+        ctx.fillStyle = C('--ink');
+        for (let i = 0; i < 3; i++) ctx.fillRect(cx - lw * 0.3 + i * lw * 0.24, it.y + 4, lw * 0.1, 14);
+      } else if (!it.hit) {
+        ctx.fillStyle = C('--line');
+        ctx.beginPath(); ctx.arc(cx, it.y, 11, 0, Math.PI * 2); ctx.fill();
+        ctx.beginPath(); ctx.arc(cx, it.y + 26, 15, Math.PI, 0); ctx.fill();
+      }
+    }
+
+    // Tren
+    const tx = laneX(s.x), ty = trainY(), tw = lw * 0.62;
+    ctx.fillStyle = s.running ? C('--ink') : C('--danger');
+    roundRect(tx - tw / 2, ty, tw, 96, [18, 18, 6, 6]); ctx.fill();
+    ctx.fillStyle = C('--tunnel');
+    roundRect(tx - tw / 2 + 7, ty + 12, tw - 14, 24, 6); ctx.fill();
+    ctx.fillStyle = C('--line');
+    ctx.fillRect(tx - tw / 2, ty + 50, tw, 8);
+    ctx.beginPath(); ctx.arc(tx - tw / 2 + 12, ty + 76, 5, 0, 7); ctx.arc(tx + tw / 2 - 12, ty + 76, 5, 0, 7); ctx.fill();
+  }
+
+  let last = 0;
+  function loop(t) {
+    const dt = Math.min((t - last) / 1000 || 0, 0.05); last = t;
+    if (s) update(dt);
+    draw();
+    requestAnimationFrame(loop);
+  }
+
+  let wake = null;
+  function start() {
+    panel.hidden = true; reset();
+    try { navigator.wakeLock && navigator.wakeLock.request('screen').then(w => wake = w).catch(() => {}); } catch (e) {}
+  }
+  $('go').onclick = start;
+  requestAnimationFrame(loop);
+})();
+</script>
