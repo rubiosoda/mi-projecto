@@ -12,6 +12,9 @@
     --line: #f2c230;      /* amarillo de línea */
     --danger: #e5484d;
     --ok: #3ccf91;
+    --car: #d8232a;       /* superdeportivo rojo */
+    --glass: #1d2a3a;
+    --flame: #6ad1ff;
     --ink: #f4f1e8;
     --muted: #9aa0ad;
     --font: "Barlow Condensed", "Arial Narrow", system-ui, sans-serif;
@@ -82,8 +85,17 @@
     font: inherit; font-size: 24px; font-weight: 800; letter-spacing: .04em; text-transform: uppercase;
     background: var(--line); color: var(--tunnel); border: 0; border-radius: 8px; padding: 14px; cursor: pointer;
   }
+  #fly {
+    position: fixed; left: 50%; transform: translateX(-50%);
+    bottom: calc(env(safe-area-inset-bottom, 0px) + 14px);
+    font-size: 20px; padding: 10px 22px; border-radius: 999px;
+    background: var(--car); color: var(--ink); box-shadow: 0 0 0 3px var(--tunnel);
+  }
+  #fly:disabled { background: var(--sleeper); color: var(--muted); cursor: default; }
+  #fly.ready { animation: glow 1s ease-in-out infinite alternate; }
+  @keyframes glow { to { box-shadow: 0 0 0 3px var(--tunnel), 0 0 22px var(--car); } }
   button:focus-visible { outline: 3px solid var(--ink); outline-offset: 3px; }
-  @media (prefers-reduced-motion: reduce) { .chip.pop { animation: none; } }
+  @media (prefers-reduced-motion: reduce) { .chip.pop, #fly.ready { animation: none; } }
 </style>
 
 <canvas id="game"></canvas>
@@ -92,15 +104,17 @@
   <div class="left">
     <div class="sign"><span class="badge">B</span><span class="txt"><small>Próxima</small><span id="station">Dalt la Vila</span></span></div>
     <div class="chip" id="aboard">0 a bordo</div>
+    <div class="chip" id="charge">Vuelo 0/5</div>
   </div>
   <div class="score"><b id="pts">0</b><small id="delivered">0 dejados</small><small id="best">Récord 0</small></div>
 </div>
 <div id="toast"></div>
+<button id="fly" type="button" disabled hidden>Volar</button>
 
 <div id="panel">
   <div class="card" id="card">
     <h1>Línea <em>0</em></h1>
-    <p>Toca a la izquierda o derecha para cambiar de vía. Recoge pasajeros y déjalos en la próxima estación de Badalona. Si chocas con una barrera roja, los pierdes.</p>
+    <p>Conduces un superdeportivo volador por las vías. Toca a la izquierda o derecha para cambiar de vía y deja a los pasajeros en la próxima estación de Badalona. Cada 5 pasajeros que recoges ganas un vuelo para pasar por encima de las barreras.</p>
     <button id="go" type="button">Salir de la estación</button>
   </div>
 </div>
@@ -120,6 +134,9 @@
   const STATION_GAP = 2400; // píxeles de vía entre estaciones
   const PLATFORM_H = 130;
   const PTS_PER_PAX = 10;
+  const PAX_PER_FLIGHT = 5;
+  const FLIGHT_TIME = 3;   // segundos en el aire
+  const MAX_CHARGES = 3;
 
   let W = 0, H = 0, dpr = 1;
   function resize() {
@@ -137,13 +154,14 @@
 
   const laneW = () => Math.min(W / 3, 140);
   const laneX = i => W / 2 + (i - 1) * laneW();
-  const trainY = () => H - Math.max(120, H * 0.18);
+  const trainY = () => H - Math.max(180, H * 0.26);
 
   let s; // estado de partida
   function reset() {
     s = { lane: 1, x: 1, speed: 340, dist: 0, pts: 0, items: [], spawn: 200,
           toStation: STATION_GAP, station: 0, aboard: 0, delivered: 0,
-          flash: 0, running: true, scroll: 0 };
+          flash: 0, running: true, scroll: 0,
+          picked: 0, charges: 0, fly: 0, grace: 0 };
     $('station').textContent = STATIONS[0];
     hud();
   }
@@ -152,6 +170,12 @@
     $('pts').textContent = s.pts;
     $('aboard').textContent = s.aboard + (s.aboard === 1 ? ' pasajero' : ' a bordo');
     $('delivered').textContent = s.delivered + ' dejados';
+    $('charge').textContent = s.charges >= MAX_CHARGES ? 'Vuelos al máximo' : `Vuelo ${s.picked}/${PAX_PER_FLIGHT}`;
+    const fly = $('fly');
+    fly.hidden = !s.running;
+    fly.disabled = !s.charges || s.fly > 0;
+    fly.classList.toggle('ready', !fly.disabled);
+    fly.textContent = s.fly > 0 ? 'Volando…' : s.charges ? `Volar ×${s.charges}` : 'Volar';
   }
   function pop() {
     const el = $('aboard'); el.classList.remove('pop'); void el.offsetWidth; el.classList.add('pop');
@@ -161,6 +185,13 @@
     const el = $('toast'); el.textContent = msg; el.classList.add('show');
     clearTimeout(toastT); toastT = setTimeout(() => el.classList.remove('show'), 900);
   }
+
+  function takeOff() {
+    if (!s || !s.running || !s.charges || s.fly > 0) return;
+    s.charges--; s.fly = FLIGHT_TIME;
+    toast('¡Despegue!'); hud();
+  }
+  $('fly').addEventListener('click', takeOff);
 
   function move(dir) {
     if (!s || !s.running) return;
@@ -180,6 +211,7 @@
   window.addEventListener('keydown', e => {
     if (e.key === 'ArrowLeft' || e.key === 'a') move(-1);
     if (e.key === 'ArrowRight' || e.key === 'd') move(1);
+    if ((e.key === 'ArrowUp' || e.key === 'w' || e.key === ' ') && panel.hidden) { e.preventDefault(); takeOff(); }
     if ((e.key === ' ' || e.key === 'Enter') && !panel.hidden) { e.preventDefault(); start(); }
   });
 
@@ -207,7 +239,7 @@
   }
 
   function crash() {
-    s.running = false;
+    s.running = false; hud();
     try { navigator.vibrate && navigator.vibrate(200); } catch (e) {}
     const lost = s.aboard;
     const record = s.pts > best;
@@ -229,6 +261,11 @@
     const dy = s.speed * dt;
     s.dist += dy;
     s.scroll = (s.scroll + dy) % 40;
+    if (s.fly > 0) {
+      s.fly -= dt;
+      if (s.fly <= 0) { s.fly = 0; s.grace = 0.4; hud(); }
+    }
+    s.grace = Math.max(0, s.grace - dt);
     s.x += (s.lane - s.x) * Math.min(1, dt * (14 + s.speed / 80));
 
     s.toStation -= dy;
@@ -250,8 +287,15 @@
       }
       const sameLane = Math.abs(laneX(s.x) - laneX(it.lane)) < lw * 0.4;
       if (sameLane && it.y > ty - 20 && it.y < ty + 90) {
-        if (it.kind === 'bar') { crash(); return; }
-        it.hit = true; s.aboard++; pop(); hud();
+        if (it.kind === 'bar') {
+          if (s.fly > 0 || s.grace > 0) continue;
+          crash(); return;
+        }
+        it.hit = true; s.aboard++; pop();
+        if (s.charges < MAX_CHARGES && ++s.picked >= PAX_PER_FLIGHT) {
+          s.picked = 0; s.charges++; toast('¡Vuelo listo!');
+        }
+        hud();
       }
     }
     s.items = s.items.filter(it => it.y < H + 80 && !(it.hit && it.kind === 'pax'));
@@ -305,19 +349,43 @@
       }
     }
 
-    // Tren
-    const tx = laneX(s.x), ty = trainY(), tw = lw * 0.62;
-    ctx.fillStyle = s.running ? C('--ink') : C('--danger');
-    roundRect(tx - tw / 2, ty, tw, 96, [18, 18, 6, 6]); ctx.fill();
-    ctx.fillStyle = C('--tunnel');
-    roundRect(tx - tw / 2 + 7, ty + 12, tw - 14, 24, 6); ctx.fill();
-    ctx.fillStyle = C('--line');
-    ctx.fillRect(tx - tw / 2, ty + 50, tw, 8);
-    ctx.beginPath(); ctx.arc(tx - tw / 2 + 12, ty + 76, 5, 0, 7); ctx.arc(tx + tw / 2 - 12, ty + 76, 5, 0, 7); ctx.fill();
+    // Superdeportivo (visto desde arriba)
+    const tx = laneX(s.x), ty = trainY(), tw = lw * 0.58;
+    const lift = s.fly > 0 ? Math.min(1, s.fly * 3, (FLIGHT_TIME - s.fly) * 3) : 0;
+    if (lift > 0) {
+      ctx.globalAlpha = 0.35; ctx.fillStyle = '#000';
+      ctx.beginPath(); ctx.ellipse(tx + 10 * lift, ty + 58 + 14 * lift, tw * 0.5, 44, 0, 0, 7); ctx.fill();
+      ctx.globalAlpha = 1;
+    }
+    ctx.save();
+    ctx.translate(tx, ty + 48 - 18 * lift);
+    ctx.scale(1 + 0.22 * lift, 1 + 0.22 * lift);
+    if (lift > 0) { // propulsores
+      ctx.fillStyle = C('--flame');
+      const f = 16 + Math.random() * 14;
+      for (const sx of [-0.28, 0.28]) {
+        ctx.beginPath(); ctx.moveTo(tw * sx - 7, 44); ctx.lineTo(tw * sx + 7, 44); ctx.lineTo(tw * sx, 44 + f); ctx.fill();
+      }
+    }
+    ctx.fillStyle = '#0b0c10'; // ruedas
+    for (const [wx, wy] of [[-1, -28], [1, -28], [-1, 26], [1, 26]]) ctx.fillRect(wx * tw / 2 - (wx < 0 ? 4 : 2), wy, 6, 16);
+    ctx.fillStyle = s.running ? C('--car') : C('--sleeper');
+    ctx.beginPath(); // carrocería afilada
+    ctx.moveTo(-tw * 0.32, -48);
+    ctx.quadraticCurveTo(0, -56, tw * 0.32, -48);
+    ctx.quadraticCurveTo(tw * 0.52, -10, tw * 0.48, 40);
+    ctx.quadraticCurveTo(0, 50, -tw * 0.48, 40);
+    ctx.quadraticCurveTo(-tw * 0.52, -10, -tw * 0.32, -48);
+    ctx.fill();
+    ctx.fillStyle = C('--glass'); // cabina
+    roundRect(-tw * 0.3, -18, tw * 0.6, 38, [14, 14, 8, 8]); ctx.fill();
+    ctx.fillStyle = C('--ink'); // faros
+    ctx.fillRect(-tw * 0.3, -48, tw * 0.14, 3); ctx.fillRect(tw * 0.16, -48, tw * 0.14, 3);
+    ctx.restore();
     if (s.aboard) {
-      ctx.fillStyle = C('--tunnel'); ctx.font = `800 20px ${C('--font')}`;
+      ctx.fillStyle = C('--ink'); ctx.font = `800 20px ${C('--font')}`;
       ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-      ctx.fillText(s.aboard, tx, ty + 24);
+      ctx.fillText(s.aboard, tx, ty + 48 - 18 * lift);
     }
   }
 
